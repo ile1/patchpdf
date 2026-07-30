@@ -62,7 +62,7 @@ export const BUILTIN_PROFILES = {
     model: "openai/gpt-4.1-mini",
     apiKeyEnv: "OPENROUTER_API_KEY",
     headers: {
-      "HTTP-Referer": "https://github.com/martialsystems/patchpdf",
+      "HTTP-Referer": "https://martialgames.net/tools/patchpdf/",
       "X-Title": "patchpdf",
     },
   },
@@ -432,7 +432,7 @@ export function snapshotForPrompt(snapshot, maxChars = 400_000) {
           `#${t.id} [p${t.page} size=${Math.round(t.fontSize)}] ${JSON.stringify(String(t.str).slice(0, 200))}`,
       )
       .join("\n");
-    lines.push(`\nEditable lines (prefer replace_line with id):\n${numbered}`);
+    lines.push(`\nEditable lines (prefer replace_line with find text; id optional):\n${numbered}`);
   }
 
   let textBudget =
@@ -542,23 +542,58 @@ function coverAndWrite(page, font, item, newText, opts = {}) {
   }
 }
 
+/**
+ * Resolve which text run a replace_line op targets.
+ * Never honor id alone when `find` does not match that run — a stale/wrong id
+ * must fall through to text matching (and may warn via the caller).
+ */
 function resolveLineTarget(textItems, op) {
+  const page = op.page != null ? Number(op.page) : null;
+  const find = op.find != null ? String(op.find) : "";
+  const findLower = find.toLowerCase();
+
+  const onPage = (t) => page == null || t.page === page;
+  const exactFind = (t) => t.str === find;
+  const softFind = (t) => find && t.str.toLowerCase().includes(findLower);
+
+  // 1) id is a hint only when the run's text actually matches find
   if (op.id != null) {
     const byId = textItems.find((t) => t.id === op.id);
-    if (byId && byId.str === op.find && byId.page === op.page) return byId;
-    if (byId && byId.page === op.page) return byId;
+    if (byId && onPage(byId)) {
+      if (exactFind(byId) || softFind(byId)) return byId;
+      // id exists but text doesn't match — ignore id (do not clobber wrong line)
+    }
   }
-  const same = textItems.filter((t) => t.page === op.page && t.str === op.find);
-  if (!same.length) {
-    const soft = textItems.filter(
-      (t) => t.page === op.page && t.str.includes(op.find),
-    );
-    if (soft.length === 1) return soft[0];
-    if (op.itemIndex != null && soft[op.itemIndex]) return soft[op.itemIndex];
-    return soft[0] ?? null;
+
+  // 2) exact string match on page
+  const same = textItems.filter((t) => onPage(t) && exactFind(t));
+  if (same.length) {
+    if (op.itemIndex != null && same[op.itemIndex]) return same[op.itemIndex];
+    return same[0];
   }
-  if (op.itemIndex != null && same[op.itemIndex]) return same[op.itemIndex];
-  return same[0];
+
+  // 3) substring match (e.g. find "Acme Corp" inside "Bill To: Acme Corp")
+  const soft = textItems.filter((t) => onPage(t) && softFind(t));
+  if (!soft.length) return null;
+  if (soft.length === 1) return soft[0];
+  if (op.itemIndex != null && soft[op.itemIndex]) return soft[op.itemIndex];
+  // Prefer the shortest run (most specific) when ambiguous
+  return soft.slice().sort((a, b) => a.str.length - b.str.length)[0];
+}
+
+/** Build replacement string: splice find→replace inside the run; never drop labels. */
+function lineReplaceText(runStr, find, replace) {
+  if (runStr == null) return replace;
+  const s = String(runStr);
+  const f = String(find ?? "");
+  const r = String(replace ?? "");
+  if (!f) return r;
+  if (s === f) return r;
+  if (s.toLowerCase().includes(f.toLowerCase())) {
+    return s.replace(new RegExp(escapeRegExp(f), "gi"), r);
+  }
+  // No substring match — only then replace the whole run
+  return r;
 }
 
 export async function applyOperations(pdfBytes, operations) {
@@ -583,16 +618,29 @@ export async function applyOperations(pdfBytes, operations) {
         case "replace_line": {
           const target = resolveLineTarget(textItems, op);
           if (!target) {
-            warnings.push(`replace_line: no match for "${op.find}" on page ${op.page}`);
+            warnings.push(
+              `replace_line: no match for "${op.find}" on page ${op.page}` +
+                (op.id != null ? ` (id #${op.id} ignored — text did not match)` : ""),
+            );
             break;
+          }
+          if (
+            op.id != null &&
+            target.id !== op.id &&
+            textItems.some((t) => t.id === op.id)
+          ) {
+            warnings.push(
+              `replace_line: id #${op.id} did not match find "${op.find}"; used #${target.id} by text`,
+            );
           }
           const idx = pageIndex(target.page, doc.getPageCount());
           if (idx == null) break;
-          coverAndWrite(doc.getPage(idx), font, target, op.replace, {
+          const newStr = lineReplaceText(target.str, op.find, op.replace);
+          coverAndWrite(doc.getPage(idx), font, target, newStr, {
             fit: op.fit !== false,
           });
           applied.push(
-            `replace_line #${target.id} p${target.page}: "${String(op.find).slice(0, 40)}" → "${String(op.replace).slice(0, 40)}"`,
+            `replace_line #${target.id} p${target.page}: "${String(target.str).slice(0, 48)}" → "${String(newStr).slice(0, 48)}"`,
           );
           break;
         }
@@ -830,7 +878,8 @@ Given a PDF content snapshot and a user instruction, output ONLY a JSON object (
 }
 
 Available operations (use only these):
-1. replace_line — PREFERRED. { "op":"replace_line", "id":0, "page":1, "find":"exact original string", "replace":"new string", "fit":true }
+1. replace_line — PREFERRED. { "op":"replace_line", "page":1, "find":"exact snippet from the snapshot", "replace":"new snippet", "fit":true, "id"?: number }
+   id is optional and only used when that run's text still contains find. Prefer find text over id.
 2. replace_text — { "op":"replace_text", "find":"snippet", "replace":"new", "page"?:1, "all"?:true, "fit"?:true }
 3. cover — visual whiteout only (NOT forensic redaction). { "op":"cover", "find":"text", "page"?:number }
 4. add_text — { "op":"add_text", "page":1, "x":number, "y":number, "text":"...", "size"?:12, "color"?:"#111111" }
@@ -842,7 +891,7 @@ Available operations (use only these):
 10. draw_rect — { "op":"draw_rect", "page":1, "x":0, "y":0, "width":100, "height":20, "color"?:"#ffffff", "fill"?:true }
 
 Rules:
-- Prefer replace_line with exact #id from the snapshot.
+- Prefer replace_line with exact find text from the snapshot. id is optional confirmation only.
 - Only change what the user asked. Leave everything else untouched.
 - Always set "fit": true for text replacements.
 - Never invent pages. Output JSON only.`;
@@ -956,7 +1005,7 @@ export async function planEdits({
       { role: "system", content: SYSTEM },
       {
         role: "user",
-        content: `PDF SNAPSHOT:\n${snapshotForPrompt(snapshot, maxChars)}\n\nUSER INSTRUCTION:\n${instruction}\n\nReturn the JSON edit plan. Prefer replace_line with fit:true.`,
+        content: `PDF SNAPSHOT:\n${snapshotForPrompt(snapshot, maxChars)}\n\nUSER INSTRUCTION:\n${instruction}\n\nReturn the JSON edit plan. Prefer replace_line with find text + fit:true (id optional).`,
       },
     ],
   });

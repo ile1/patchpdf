@@ -52,16 +52,17 @@ import { extractSnapshot, applyOperations } from "./engine.js";
 
 const bytes = new Uint8Array(await file.arrayBuffer());
 const snap = await extractSnapshot(bytes);
+// Prefer find text over id (id is optional and only used when it matches find).
 const result = await applyOperations(bytes, [
   {
     op: "replace_line",
-    id: 0,
     page: 1,
     find: "Acme Corp",
     replace: "Contoso",
     fit: true,
   },
 ]);
+// Resulting run text: "Bill To: Contoso" (label kept; not just "Contoso")
 // result.bytes → save as PDF
 ```
 
