@@ -1,7 +1,10 @@
 patchpdf open source components
 Copyright (c) 2026 Martial Systems LLC
 
+This repository contains MIT-licensed source code only.
+
+Brand assets, product marks, and the official hosted UI are not licensed
+under MIT. See TRADEMARK.md and LICENSE.
+
 Third-party libraries loaded at runtime from CDNs (pdf-lib, pdf.js, docx)
 remain under their respective licenses.
-
-Product branding is described in BRAND.md and is not MIT-licensed.

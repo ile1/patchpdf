@@ -2,69 +2,93 @@
 
 Edit text on an existing PDF without rebuilding the whole file.
 
-You load a PDF, change specific lines (or let a model propose a short list of ops), then write a new PDF that still looks like the original. Work runs in the browser with [pdf-lib](https://pdf-lib.js.org/) and [pdf.js](https://mozilla.github.io/pdf.js/).
+Load a PDF, change specific lines (or let a model propose a short list of
+ops), then write a new PDF that still looks like the original. Runs in the
+browser with pdf-lib and pdf.js.
 
-## License
+## License (read this)
 
-**MIT** for the software in this repository (`engine.js`, demo UI, sample PDF).
+| | |
+|---|---|
+| **MIT** | Source code in this repo (`engine.js`, demo UI, sample PDF) |
+| **Not MIT** | Name/logo/official product branding (see [TRADEMARK.md](./TRADEMARK.md)) |
 
-Name, logo, and official product branding are **not** licensed here. See [BRAND.md](./BRAND.md).
+You can fork, modify, and ship the **code**. Bring your own name and icons
+for anything public-facing. Do not present a fork as the official
+martialgames.net product.
 
 ## Official product
 
-Hosted build with full product UI and branding:
+Hosted build (branded UI, private site APIs):
 
-**https://martialgames.net/tools/patchpdf/**
+https://martialgames.net/tools/patchpdf/
 
-This GitHub repo is the open source **engine and a minimal demo**. It is not the Martial Games site and does not include production API proxies.
+This GitHub repo is the engine plus a **generic demo**. No LLC product icons
+are included on purpose.
 
-## Quick start
+## Run the demo
 
 ```bash
-# any static server
 python3 -m http.server 8080
 # open http://127.0.0.1:8080/
 ```
 
-Or import the engine in your own page:
+No build step. No private asset folder. The demo UI is self-contained and
+uses plain CSS (no Martial Games marks).
+
+### Building your own branded app from the engine
+
+1. Copy `engine.js` into your project (or submodule this repo).
+2. Call `extractSnapshot`, `applyOperations`, `editPdf`, etc. from your UI.
+3. Supply **your own** favicon, logo, and CSS. Do not pull icons from the
+   official site or from old commits of this project.
+4. If you need a server-side LLM proxy, write your own. The production proxy
+   on martialgames.net is not open source.
 
 ```js
-import { extractSnapshot, applyOperations, editPdf } from "./engine.js";
+import { extractSnapshot, applyOperations } from "./engine.js";
 
 const bytes = new Uint8Array(await file.arrayBuffer());
 const snap = await extractSnapshot(bytes);
-// snap.textItems → line editor
 const result = await applyOperations(bytes, [
-  { op: "replace_line", id: 0, page: 1, find: "Acme Corp", replace: "Contoso", fit: true },
+  {
+    op: "replace_line",
+    id: 0,
+    page: 1,
+    find: "Acme Corp",
+    replace: "Contoso",
+    fit: true,
+  },
 ]);
-// result.bytes → download as PDF
+// result.bytes → save as PDF
 ```
 
-## Layout of the repo
+## Files
 
-| File | What it is |
-|------|------------|
-| `engine.js` | Extract, validate ops, apply patches, optional AI plan, DOCX map |
-| `app.js` / `index.html` / `app.css` | Small demo UI (no product branding assets) |
-| `sample-invoice.pdf` | Dummy invoice for local tries |
-
-CDN imports for pdf-lib, pdf.js, and docx are loaded from jsDelivr inside `engine.js`.
+| File | Role |
+|------|------|
+| `engine.js` | Extract, validate, apply, optional AI plan, DOCX map |
+| `app.js` / `index.html` / `app.css` | Generic demo shell |
+| `sample-invoice.pdf` | Dummy invoice for local tests |
+| `TRADEMARK.md` | What MIT does not cover |
+| `LICENSE` / `NOTICE` | Legal |
 
 ## How patching works
 
 1. Read text runs and positions from the PDF.
 2. Plan a change (hand edit or model JSON).
-3. Cover the old glyphs and draw the new text in roughly the same box.
+3. Cover the old glyphs and draw the new text in the same box.
 4. Save the modified PDF.
 
-The model never redraws the full page. It only suggests operations. Apply always runs on the original bytes.
+The model does not redraw the full page. It only suggests operations.
+Apply always runs on the original bytes.
 
-Word export is a geometry map of those same runs into `.docx`. Useful for drafting. The patched PDF is still the thing you keep when layout matters.
+## AI notes
 
-## AI profiles
-
-`engine.js` can call OpenAI-compatible chat endpoints if you pass a key and base URL. Local regex patterns work offline. Cloud CORS is your problem in forks; the production site uses a private proxy that is not in this repo.
+`engine.js` can call OpenAI-compatible chat APIs if you pass a key and base
+URL. Local regex patterns work offline. Cloud CORS is on you in forks.
 
 ## Contributing
 
-PRs against the engine and demo are welcome. Please do not add Martial Games logos, product wordmarks, or copy that implies official endorsement of a fork.
+PRs on the engine and demo are welcome. Do not add Martial Games logos,
+product wordmarks, or copy that implies official endorsement of a fork.

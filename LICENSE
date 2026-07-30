@@ -20,7 +20,17 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
----
+---------------------------------------------------------------------------
+SCOPE OF THIS LICENSE
 
-Brand, logos, and the official product identity are not covered by this license.
-See BRAND.md.
+This MIT license applies only to the source code and documentation files
+shipped in this repository (for example engine.js, the demo UI, and the
+sample PDF).
+
+It does NOT grant any rights to:
+  - product names used as marks for the official hosted tool
+  - logos, icons, favicons, wordmarks, or marketing artwork of Martial
+    Systems LLC / Martial Games
+  - assets that appear only on martialgames.net
+
+See TRADEMARK.md.
