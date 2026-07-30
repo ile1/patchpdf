@@ -62,7 +62,7 @@ export const BUILTIN_PROFILES = {
     model: "openai/gpt-4.1-mini",
     apiKeyEnv: "OPENROUTER_API_KEY",
     headers: {
-      "HTTP-Referer": "https://github.com/ile1/patchpdf",
+      "HTTP-Referer": "https://github.com/martialsystems/patchpdf",
       "X-Title": "patchpdf",
     },
   },
