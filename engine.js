@@ -439,7 +439,11 @@ export function snapshotForPrompt(snapshot, maxChars = 400_000) {
           `#${t.id} [p${t.page} size=${Math.round(t.fontSize)}] ${JSON.stringify(String(t.str).slice(0, 200))}`,
       )
       .join("\n");
-    lines.push(`\nEditable lines (prefer replace_line with find text; id optional):\n${numbered}`);
+    lines.push(
+      `\nEditable lines (reading order: top→bottom, left→right). ` +
+        `Format: #id [pN size=S] "text". ` +
+        `If the same text appears more than once, replace_line MUST set id (or itemIndex among matches on that page) or apply will SKIP:\n${numbered}`,
+    );
   }
 
   let textBudget =
@@ -1058,11 +1062,11 @@ Given a PDF content snapshot and a user instruction, output ONLY a JSON object (
 }
 
 Available operations (use only these):
-1. replace_line — PREFERRED. { "op":"replace_line", "page":1, "find":"exact snippet", "replace":"new snippet", "fit":true, "id"?: number, "itemIndex"?: number, "force"?: false }
-   If find matches multiple runs, the op is SKIPPED unless id or itemIndex is set (fail closed).
+1. replace_line — PREFERRED for single fields/cells.
+   { "op":"replace_line", "page":1, "find":"exact snippet from snapshot", "replace":"new snippet", "fit":true, "id": <number from #id>, "itemIndex"?: number, "force"?: false }
    force:true allows font crush below 8pt; otherwise too-long cell text is SKIPPED.
 2. replace_text — { "op":"replace_text", "find":"snippet", "replace":"new", "page"?:1, "all"?:true, "fit"?:true, "force"?:false }
-   Multiple matches require all:true or the op is SKIPPED.
+   Multiple matches require all:true or the op is SKIPPED. Prefer replace_line + id for one cell.
 3. cover — visual whiteout only (NOT forensic redaction). { "op":"cover", "find":"text", "page"?:number }
 4. add_text — { "op":"add_text", "page":1, "x":number, "y":number, "text":"...", "size"?:12, "color"?:"#111111" }
 5. watermark — { "op":"watermark", "text":"CONFIDENTIAL", "opacity"?:0.15, "angle"?:-35, "size"?:48 }
@@ -1072,13 +1076,21 @@ Available operations (use only these):
 9. rotate_pages — { "op":"rotate_pages", "pages":[1], "degrees":90 }
 10. draw_rect — { "op":"draw_rect", "page":1, "x":0, "y":0, "width":100, "height":20, "color"?:"#ffffff", "fill"?:true }
 
+DISAMBIGUATION (critical — engine fail-closed):
+- Snapshot lines are listed as "#id [pN size=S] \\"text\\"" in reading order: top-to-bottom, then left-to-right on the same page.
+- If the same find string appears more than once on the page (tables: repeated "$500.00", "1", etc.), you MUST include "id" from that #id line for the intended cell. Without id (or itemIndex), the apply step SKIPS the op — it will not guess.
+- itemIndex is the 0-based index among matches that share the same find on that page, counting in the same reading order (top-to-bottom, left-to-right). Prefer id over itemIndex when both are available.
+- To change EVERY occurrence of a string, use replace_text with "all": true (not one vague replace_line).
+- To change several specific cells, emit one replace_line per cell, each with its own id.
+
 Rules:
-- Prefer replace_line with find text + id when values repeat (tables). Never invent pages.
-- Prefer short replacements that fit; do not set force unless the user accepts tiny type.
-- Soft edit mode only: visual cover, not content-stream delete.
+- Copy "find" exactly from the snapshot text (substring ok if unique in that run, e.g. "Acme Corp" inside "Bill To: Acme Corp").
+- Prefer short replacements that fit the original box; do not set force unless the user accepts tiny type.
+- Soft edit only: visual cover over old glyphs, not content-stream delete.
 - Only change what the user asked. Leave everything else untouched.
 - Always set "fit": true for text replacements.
-- Never invent pages. Output JSON only.`;
+- Never invent pages or invent id numbers not present in the snapshot.
+- Output JSON only.`;
 
 const PROXY_HOSTS = new Set([
   "api.openai.com",
@@ -1189,7 +1201,14 @@ export async function planEdits({
       { role: "system", content: SYSTEM },
       {
         role: "user",
-        content: `PDF SNAPSHOT:\n${snapshotForPrompt(snapshot, maxChars)}\n\nUSER INSTRUCTION:\n${instruction}\n\nReturn the JSON edit plan. Prefer replace_line with find text + fit:true (id optional).`,
+        content:
+          `PDF SNAPSHOT:\n${snapshotForPrompt(snapshot, maxChars)}\n\n` +
+          `USER INSTRUCTION:\n${instruction}\n\n` +
+          `Return the JSON edit plan only.\n` +
+          `Use replace_line with fit:true. Copy find from the snapshot.\n` +
+          `If any find string is not unique on that page (common in tables), you MUST set id from the #id list ` +
+          `(or itemIndex among matches, top-to-bottom then left-to-right). Missing disambiguation → op skipped.\n` +
+          `For every occurrence of a value, use replace_text with all:true instead of one ambiguous replace_line.`,
       },
     ],
   });

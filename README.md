@@ -113,6 +113,19 @@ rewrite is not implemented yet.
 **Watermark / rotate / metadata / delete pages** are straightforward and do not
 use the cover path.
 
+
+## AI planner contract
+
+The apply engine **fail-closes** on ambiguous finds. Wire your planner so that:
+
+- Snapshot lines are `#id [pN …] "text"` in **top-to-bottom, left-to-right** order.
+- If `find` is not unique on the page, the op **must** include `id` (preferred) or
+  `itemIndex` (0-based among matches in that same reading order).
+- Otherwise `applyOperations` returns `SKIPPED` and draws nothing.
+- To change every copy of a string, use `replace_text` with `"all": true`.
+
+`planEdits` embeds this contract in its system prompt. Custom planners should do the same.
+
 ## AI notes
 
 `engine.js` can call OpenAI-compatible chat APIs if you pass a key and base
