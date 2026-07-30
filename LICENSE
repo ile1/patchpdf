@@ -20,7 +20,7 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
-Note: This MIT license applies to the patchpdf tool sources in this directory
-(engine, UI, samples) when published as the open-source mirror. Martial Games
-site hosting, Cloudflare Functions, and other products remain under their own
-terms.
+---
+
+Brand, logos, and the official product identity are not covered by this license.
+See BRAND.md.

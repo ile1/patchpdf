@@ -1,0 +1,7 @@
+patchpdf open source components
+Copyright (c) 2026 Martial Systems LLC
+
+Third-party libraries loaded at runtime from CDNs (pdf-lib, pdf.js, docx)
+remain under their respective licenses.
+
+Product branding is described in BRAND.md and is not MIT-licensed.

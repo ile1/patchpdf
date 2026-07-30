@@ -1,251 +1,143 @@
 <!DOCTYPE html>
 <html lang="en">
-<!--
-  patchpdf — keep the PDF. Change the words.
-  Copyright (c) 2026 Martial Systems LLC. All rights reserved.
-  Own tool chrome — not the Martial Games portal skin.
--->
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <title>patchpdf — keep the PDF. Change the words.</title>
-  <meta
-    name="description"
-    content="Patch text on a PDF without regenerating the file. Line-level edits in your browser. Optional AI writes the plan — the original layout stays put."
-  />
+  <title>patchpdf demo</title>
+  <meta name="description" content="Open source demo: patch text on a PDF without rebuilding the file." />
   <meta name="theme-color" content="#0c0d10" />
-  <meta property="og:title" content="patchpdf" />
-  <meta
-    property="og:description"
-    content="Keep the PDF. Change the words. No full-document rewrite."
-  />
-  <meta property="og:image" content="icon.jpg" />
-  <link rel="icon" href="favicon.svg" type="image/svg+xml" />
-  <link rel="apple-touch-icon" href="icon.jpg" />
-  <link rel="stylesheet" href="app.css?v=3" />
+  <link rel="stylesheet" href="app.css" />
 </head>
 <body>
   <div class="app" id="app">
     <header class="app-header">
       <div class="app-header-inner">
         <div class="brand-block">
-          <img class="brand-mark" src="favicon.svg" width="40" height="40" alt="" />
           <div class="min-w-0">
-            <p class="eyebrow">Martial Systems · browser tool</p>
+            <p class="eyebrow">open source demo</p>
             <h1>patchpdf</h1>
-            <p class="tagline">Keep the PDF. Change the words.</p>
+            <p class="tagline">Edit the PDF you have. Do not rebuild it.</p>
           </div>
         </div>
         <p class="header-tag">
-          Most “AI PDF” tools rebuild the whole page and quietly move your margins.
-          This one doesn’t. It opens the file you already have, finds the line, and
-          patches it. Layout stays. Your invoice still looks like your invoice.
+          Minimal demo of the MIT engine. Official product UI and branding live on
+          <a href="https://martialgames.net/tools/patchpdf/" style="color:var(--accent)">martialgames.net</a>.
+          See BRAND.md.
         </p>
-        <nav class="header-links" aria-label="Martial Games">
-          <a class="exit-link" href="/">Home</a>
-          <a class="exit-link" href="/#games">More games</a>
-          <a class="exit-link" href="/tools/">Tools</a>
-        </nav>
       </div>
     </header>
 
     <main class="app-main">
       <section class="panel" aria-label="Editor">
         <div class="tabs" role="tablist">
-          <button type="button" class="tab" id="tab-safe" role="tab" aria-selected="true">
-            Line edit
-          </button>
-          <button type="button" class="tab" id="tab-ai" role="tab" aria-selected="false">
-            AI plan
-          </button>
+          <button type="button" class="tab" id="tab-safe" role="tab" aria-selected="true">Line edit</button>
+          <button type="button" class="tab" id="tab-ai" role="tab" aria-selected="false">AI plan</button>
         </div>
-
         <div id="msg" class="msg" hidden></div>
 
         <div class="section">
-          <div class="section-hd">Your file</div>
+          <div class="section-hd">PDF</div>
           <div class="section-bd stack">
             <div class="row">
               <label class="file-btn">
-                <span id="file-label">Drop a PDF</span>
+                <span id="file-label">Choose PDF</span>
                 <input id="file-input" type="file" accept="application/pdf,.pdf" />
               </label>
-              <button type="button" class="btn" id="btn-sample">Try sample invoice</button>
+              <button type="button" class="btn" id="btn-sample">Sample invoice</button>
             </div>
-            <p class="hint" id="status-lines">
-              Edits run on this machine. The PDF is not uploaded to patch a field.
-            </p>
+            <p class="hint" id="status-lines">Runs locally in your browser.</p>
           </div>
         </div>
 
         <div id="panel-safe">
           <div class="section">
-            <div class="section-hd"><span>Metadata</span></div>
+            <div class="section-hd">Metadata</div>
             <div class="section-bd">
               <div class="row">
-                <label class="field">Title
-                  <input type="text" id="meta-title" autocomplete="off" />
-                </label>
-                <label class="field">Author
-                  <input type="text" id="meta-author" autocomplete="off" />
-                </label>
-                <label class="field">Subject
-                  <input type="text" id="meta-subject" autocomplete="off" />
-                </label>
+                <label class="field">Title<input type="text" id="meta-title" autocomplete="off" /></label>
+                <label class="field">Author<input type="text" id="meta-author" autocomplete="off" /></label>
+                <label class="field">Subject<input type="text" id="meta-subject" autocomplete="off" /></label>
               </div>
             </div>
           </div>
-
           <div class="section">
             <div class="section-hd">
-              <span>Lines on the page</span>
-              <span class="badge" id="dirty-badge" hidden>0 changed</span>
+              <span>Lines</span>
+              <span class="badge" id="dirty-badge" hidden>0</span>
             </div>
             <div class="section-bd stack">
               <div class="row">
                 <label class="field" style="flex:0 0 8rem">Page
-                  <select id="page-filter">
-                    <option value="all">All pages</option>
-                  </select>
+                  <select id="page-filter"><option value="all">All</option></select>
                 </label>
                 <label class="field">Find
-                  <input type="search" id="line-query" placeholder="Filter…" />
+                  <input type="search" id="line-query" placeholder="Filter" />
                 </label>
-                <label class="field" style="flex:0 0 auto; flex-direction:row; align-items:center; gap:0.4rem; padding-top:1.2rem">
-                  <input type="checkbox" id="dirty-only" />
-                  Only edits
+                <label class="field" style="flex:0 0 auto;flex-direction:row;align-items:center;gap:0.4rem;padding-top:1.2rem">
+                  <input type="checkbox" id="dirty-only" /> Changed only
                 </label>
               </div>
               <div class="line-list" id="line-list"></div>
               <div class="row">
-                <button type="button" class="btn btn-primary" id="btn-apply-lines">
-                  Patch PDF
-                </button>
-                <button type="button" class="btn btn-ghost" id="btn-reset-lines">Undo edits</button>
+                <button type="button" class="btn btn-primary" id="btn-apply-lines">Apply</button>
+                <button type="button" class="btn btn-ghost" id="btn-reset-lines">Reset</button>
               </div>
-              <p class="hint">
-                Each change covers the old glyphs and draws the new text in the same box.
-                Built for short field swaps on real text PDFs — not photo scans.
-              </p>
             </div>
           </div>
         </div>
 
         <div id="panel-ai" hidden>
           <div class="section">
-            <div class="section-hd">What should change</div>
+            <div class="section-hd">Instruction</div>
             <div class="section-bd stack">
-              <textarea
-                id="instruction"
-                placeholder='replace "Acme Corp" with "Contoso"'
-              >replace "Acme Corp" with "Contoso"</textarea>
+              <textarea id="instruction">replace "Acme Corp" with "Contoso"</textarea>
               <div class="row" id="presets">
-                <button type="button" class="btn btn-ghost" data-preset='replace "Acme Corp" with "Contoso"'>
-                  Acme → Contoso
-                </button>
-                <button type="button" class="btn btn-ghost" data-preset='watermark "CONFIDENTIAL"'>
-                  Watermark
-                </button>
-                <button type="button" class="btn btn-ghost" data-preset="delete pages 2">
-                  Drop page 2
-                </button>
+                <button type="button" class="btn btn-ghost" data-preset='replace "Acme Corp" with "Contoso"'>Acme to Contoso</button>
+                <button type="button" class="btn btn-ghost" data-preset='watermark "CONFIDENTIAL"'>Watermark</button>
               </div>
-              <p class="hint">
-                AI never redraws the document. It returns a short list of ops
-                (which line, what text). You apply them to the same PDF bytes.
-              </p>
             </div>
           </div>
-
           <div class="section">
-            <div class="section-hd">Who plans it</div>
+            <div class="section-hd">Provider</div>
             <div class="section-bd stack">
-              <label class="field">Profile
-                <select id="profile"></select>
-              </label>
-              <label class="field">API key (this browser session only)
-                <input type="password" id="api-key" autocomplete="off" spellcheck="false" />
-              </label>
-              <label class="field" style="flex-direction:row; align-items:center; gap:0.4rem">
-                <input type="checkbox" id="show-key" data-keep-enabled="1" />
-                Show key
+              <label class="field">Profile<select id="profile"></select></label>
+              <label class="field">API key<input type="password" id="api-key" autocomplete="off" /></label>
+              <label class="field" style="flex-direction:row;align-items:center;gap:0.4rem">
+                <input type="checkbox" id="show-key" data-keep-enabled="1" /> Show key
               </label>
               <div id="custom-fields" class="stack" hidden>
-                <label class="field">Base URL
-                  <input type="text" id="custom-base" placeholder="https://…/v1" />
-                </label>
-                <label class="field">Model
-                  <input type="text" id="custom-model" placeholder="model-id" />
-                </label>
+                <label class="field">Base URL<input type="text" id="custom-base" /></label>
+                <label class="field">Model<input type="text" id="custom-model" /></label>
               </div>
-              <p class="hint">
-                <strong>Local patterns</strong> — no key, no network.
-                Cloud models get a text snapshot only (not the PDF file). Keys ride
-                your session; cloud calls go through an allowlisted proxy so the
-                browser can talk to the provider.
-              </p>
+              <p class="hint">Local patterns need no key. Cloud calls need CORS on the provider or your own proxy.</p>
               <div class="row">
-                <button type="button" class="btn" id="btn-plan">Show plan</button>
-                <button type="button" class="btn btn-primary" id="btn-run-ai">
-                  Plan &amp; patch
-                </button>
-                <button type="button" class="btn btn-ghost" id="btn-apply-plan" disabled>
-                  Apply plan
-                </button>
+                <button type="button" class="btn" id="btn-plan">Plan</button>
+                <button type="button" class="btn btn-primary" id="btn-run-ai">Plan and apply</button>
+                <button type="button" class="btn btn-ghost" id="btn-apply-plan" disabled>Apply plan</button>
               </div>
-              <div class="plan-box" id="plan-box" aria-label="Edit plan JSON"></div>
+              <div class="plan-box" id="plan-box"></div>
             </div>
           </div>
         </div>
 
         <div class="section">
           <div class="section-hd">Log</div>
-          <div class="section-bd">
-            <div class="plan-box" id="result-box" style="min-height:3rem"></div>
-          </div>
+          <div class="section-bd"><div class="plan-box" id="result-box" style="min-height:3rem"></div></div>
         </div>
-
-        <p class="footer-note">
-          The job is the <strong>PDF</strong>: patch in place, download, ship.
-          Word export is a courtesy map of the same text geometry — handy for
-          drafting, never a substitute for the patched file.
-          Open source: <a href="https://github.com/ile1/patchpdf" rel="noopener">ile1/patchpdf</a>.
-        </p>
+        <p class="footer-note">MIT engine. Branding reserved. See BRAND.md and LICENSE.</p>
       </section>
 
       <section class="panel" aria-label="Preview">
         <div class="toolbar">
           <button type="button" class="btn" id="btn-preview-orig" aria-pressed="true">Original</button>
-          <button type="button" class="btn" id="btn-preview-edited" aria-pressed="false" disabled>
-            Patched
-          </button>
-          <button type="button" class="btn btn-primary" id="btn-download" disabled>
-            Download PDF
-          </button>
-          <button
-            type="button"
-            class="btn"
-            id="btn-docx"
-            title="Maps existing text geometry into Word. Does not rewrite copy."
-          >
-            Open in Word
-          </button>
+          <button type="button" class="btn" id="btn-preview-edited" aria-pressed="false" disabled>Edited</button>
+          <button type="button" class="btn btn-primary" id="btn-download" disabled>Download PDF</button>
+          <button type="button" class="btn" id="btn-docx">Export DOCX</button>
         </div>
-        <iframe
-          class="preview-frame"
-          id="preview-frame"
-          title="PDF preview"
-          hidden
-        ></iframe>
-        <p class="hint" style="margin-top:0.5rem">
-          Side‑by‑side is the proof: same page furniture, one field different.
-          <strong>Open in Word</strong> copies measured positions into an editable
-          .docx — original wording only, no AI rewrite.
-        </p>
+        <iframe class="preview-frame" id="preview-frame" title="PDF preview" hidden></iframe>
       </section>
     </main>
   </div>
-
-  <script type="module" src="app.js?v=3"></script>
+  <script type="module" src="app.js"></script>
 </body>
 </html>
