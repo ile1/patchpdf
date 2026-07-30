@@ -86,6 +86,28 @@ const result = await applyOperations(bytes, [
 The model does not redraw the full page. It only suggests operations.
 Apply always runs on the original bytes.
 
+
+## Important limits (read before production use)
+
+**Edits are visual covers, not content-stream deletes.**  
+`replace_line` / `replace_text` draw a white rectangle over the old run and paint
+new text on top. The original glyphs often remain in the PDF content stream.
+`pdftotext`, copy/paste, search, and screen readers may still see the old value
+next to the new one. The `cover` op is the same idea (and is labeled as such).
+This is **not** forensic redaction and is a poor fit for sealed legal/financial
+correction workflows until a true stream rewrite lands.
+
+**Ambiguous matches warn, they do not invent certainty.**  
+If `"$500.00"` appears four times, the engine edits one occurrence and puts the
+other ids in `warnings` unless you pass `id` or `itemIndex`. Check `warnings`
+on every apply.
+
+**Long replacements shrink to fit** (down to ~5.5pt) and emit a warning when the
+text is crushed or still overflows. Prefer short cell values in tables.
+
+**Watermark / rotate / metadata / delete pages** are straightforward and do not
+use the cover path.
+
 ## AI notes
 
 `engine.js` can call OpenAI-compatible chat APIs if you pass a key and base
