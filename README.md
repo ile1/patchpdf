@@ -97,13 +97,18 @@ next to the new one. The `cover` op is the same idea (and is labeled as such).
 This is **not** forensic redaction and is a poor fit for sealed legal/financial
 correction workflows until a true stream rewrite lands.
 
-**Ambiguous matches warn, they do not invent certainty.**  
-If `"$500.00"` appears four times, the engine edits one occurrence and puts the
-other ids in `warnings` unless you pass `id` or `itemIndex`. Check `warnings`
-on every apply.
+**Ambiguous matches fail closed.**  
+If `"$500.00"` appears four times, `replace_line` is **SKIPPED** (nothing drawn)
+unless you pass `id` or `itemIndex`. `replace_text` with multiple hits is skipped
+unless `all: true`. Check `result.warnings` for `SKIPPED:` lines.
 
-**Long replacements shrink to fit** (down to ~5.5pt) and emit a warning when the
-text is crushed or still overflows. Prefer short cell values in tables.
+**Soft edit mode only (default).**  
+Replacements that need a font smaller than **8pt** to fit the original box are
+**SKIPPED** unless you set `force: true` (then they may draw as small as 5.5pt
+with a warning). Prefer short cell values in tables.
+
+**Mode name:** these text ops are *soft* (visual cover). A future *hard* stream
+rewrite is not implemented yet.
 
 **Watermark / rotate / metadata / delete pages** are straightforward and do not
 use the cover path.

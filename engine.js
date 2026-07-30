@@ -208,7 +208,9 @@ export function validateOperations(rawOps) {
       }
       if (n.page != null) n.page = Number(n.page);
       if (n.id != null) n.id = Number(n.id);
+      if (n.itemIndex != null) n.itemIndex = Number(n.itemIndex);
       n.fit = n.fit !== false;
+      n.force = n.force === true;
     } else if (kind === "replace_text" || kind === "cover") {
       if (typeof n.find !== "string") {
         warnings.push(`op[${i}]: ${kind} needs find string`);
@@ -219,7 +221,12 @@ export function validateOperations(rawOps) {
         continue;
       }
       if (n.page != null) n.page = Number(n.page);
-      if (kind === "replace_text") n.fit = n.fit !== false;
+      if (kind === "replace_text") {
+        n.fit = n.fit !== false;
+        n.force = n.force === true;
+        // default: fail closed on multi-match unless all:true
+        if (n.all == null) n.all = false;
+      }
     } else if (kind === "add_text") {
       n.page = Number(n.page);
       n.x = Number(n.x);
@@ -500,46 +507,76 @@ function findMatches(items, find, page) {
   });
 }
 
-const FIT_FLOOR_PT = 5.5;
+/** Absolute minimum draw size when force:true */
+const FIT_ABSOLUTE_FLOOR_PT = 5.5;
+/** Refuse soft fit below this unless force:true */
+const FIT_MIN_READABLE_PT = 8;
 
 /**
- * Cover original glyphs and redraw text.
- * Returns metrics so callers can warn on fit crush / overflow.
- * When fit=true, cover width stays at the original run box so table cells
- * do not creep into the next column.
+ * Measure how small text must go to fit the original run box.
+ * Does not draw.
  */
-function coverAndWrite(page, font, item, newText, opts = {}) {
-  const pad = 1.2;
+function measureFit(font, item, newText, fit) {
   let size = item.fontSize || 12;
   const origSize = size;
   const boxW = Math.max(item.width, 4);
-  const fit = opts.fit !== false;
-  let hitFloor = false;
-
-  if (!opts.coverOnly && newText && fit) {
-    let guard = 0;
-    while (
-      guard++ < 80 &&
-      size > FIT_FLOOR_PT &&
-      font.widthOfTextAtSize(newText, size) > boxW * 1.02
-    ) {
-      size -= 0.2;
-    }
-    if (size <= FIT_FLOOR_PT + 0.05) {
-      size = FIT_FLOOR_PT;
-      hitFloor =
-        font.widthOfTextAtSize(newText, size) > boxW * 1.02 || size < origSize - 0.15;
-    } else if (size < origSize - 0.15) {
-      // shrunk but not to floor — still useful signal if heavy shrink
-      hitFloor = false;
-    }
+  if (!newText || fit === false) {
+    const w = newText ? font.widthOfTextAtSize(newText, size) : 0;
+    return {
+      size,
+      origSize,
+      boxW,
+      stillOverflows: w > boxW * 1.02,
+      needsBelowReadable: false,
+      hitAbsoluteFloor: false,
+    };
   }
+  let guard = 0;
+  while (
+    guard++ < 80 &&
+    size > FIT_ABSOLUTE_FLOOR_PT &&
+    font.widthOfTextAtSize(newText, size) > boxW * 1.02
+  ) {
+    size -= 0.2;
+  }
+  if (size < FIT_ABSOLUTE_FLOOR_PT) size = FIT_ABSOLUTE_FLOOR_PT;
+  const stillOverflows = font.widthOfTextAtSize(newText, size) > boxW * 1.02;
+  const needsBelowReadable =
+    size + 0.05 < FIT_MIN_READABLE_PT ||
+    (stillOverflows && size <= FIT_MIN_READABLE_PT + 0.05);
+  return {
+    size,
+    origSize,
+    boxW,
+    stillOverflows,
+    needsBelowReadable,
+    hitAbsoluteFloor: size <= FIT_ABSOLUTE_FLOOR_PT + 0.05,
+  };
+}
+
+/**
+ * Cover original glyphs and redraw text.
+ * When fit=true, cover width stays at the original run box so table cells
+ * do not creep into the next column.
+ * @param {number} [opts.forcedSize] precomputed size
+ */
+function coverAndWrite(page, font, item, newText, opts = {}) {
+  const pad = 1.2;
+  const fit = opts.fit !== false;
+  const measured =
+    opts.measured ||
+    measureFit(font, item, newText, fit && !opts.coverOnly);
+  const size =
+    opts.forcedSize != null
+      ? opts.forcedSize
+      : !opts.coverOnly && newText && fit
+        ? measured.size
+        : item.fontSize || 12;
+  const boxW = Math.max(item.width, 4);
 
   const textWidth =
     newText && !opts.coverOnly ? font.widthOfTextAtSize(newText, size) : 0;
-  // fit mode: stay inside original cell so neighbors stay clean
-  const coverW =
-    (fit ? boxW : Math.max(boxW, textWidth)) + pad * 2;
+  const coverW = (fit ? boxW : Math.max(boxW, textWidth)) + pad * 2;
   const coverH = Math.max(item.height, item.fontSize || size, size) + pad * 2;
 
   page.drawRectangle({
@@ -563,20 +600,27 @@ function coverAndWrite(page, font, item, newText, opts = {}) {
 
   return {
     size,
-    origSize,
-    hitFloor,
+    origSize: measured.origSize,
     stillOverflows:
       !opts.coverOnly &&
       Boolean(newText) &&
       font.widthOfTextAtSize(newText, size) > boxW * 1.02,
+    forced: Boolean(opts.force),
   };
+}
+
+function describeIds(arr) {
+  return (
+    arr
+      .slice(0, 8)
+      .map((t) => `#${t.id}`)
+      .join(", ") + (arr.length > 8 ? ", …" : "")
+  );
 }
 
 /**
  * Resolve which text run a replace_line op targets.
- * Returns { target, warnings }. Never honors id alone when find mismatches.
- * Ambiguous exact/substring matches always produce a warning unless itemIndex
- * or a unique id disambiguates.
+ * Fail closed: multiple matches without id/itemIndex → target null + skipped reason.
  */
 function resolveLineTarget(textItems, op) {
   const warnings = [];
@@ -588,20 +632,13 @@ function resolveLineTarget(textItems, op) {
   const exactFind = (t) => t.str === find;
   const softFind = (t) => find && t.str.toLowerCase().includes(findLower);
 
-  const describe = (arr) =>
-    arr
-      .slice(0, 8)
-      .map((t) => `#${t.id}`)
-      .join(", ") + (arr.length > 8 ? ", …" : "");
-
-  // 1) id is a hint only when the run's text actually matches find
+  // 1) id is authoritative only when that run still contains find
   if (op.id != null) {
     const byId = textItems.find((t) => t.id === op.id);
     if (byId && onPage(byId)) {
       if (exactFind(byId) || softFind(byId)) {
-        return { target: byId, warnings };
+        return { target: byId, warnings, skipped: null };
       }
-      // id exists but text doesn't match — ignore id
     }
   }
 
@@ -609,56 +646,60 @@ function resolveLineTarget(textItems, op) {
   const same = textItems.filter((t) => onPage(t) && exactFind(t));
   if (same.length) {
     if (op.itemIndex != null && same[op.itemIndex]) {
-      if (same.length > 1) {
-        warnings.push(
-          `replace_line: ${same.length} exact matches for "${find}" on page ${page ?? "any"}; used itemIndex=${op.itemIndex} (ids ${describe(same)})`,
-        );
-      }
-      return { target: same[op.itemIndex], warnings };
+      return { target: same[op.itemIndex], warnings, skipped: null };
     }
-    if (same.length > 1) {
-      warnings.push(
-        `replace_line: ${same.length} exact matches for "${find}" on page ${page ?? "any"}; used first id #${same[0].id} (ids ${describe(same)}). Pass itemIndex or a unique id to pick another.`,
-      );
+    if (same.length === 1) {
+      return { target: same[0], warnings, skipped: null };
     }
-    return { target: same[0], warnings };
+    // Fail closed — do not silently pick same[0]
+    return {
+      target: null,
+      warnings,
+      skipped: `SKIPPED replace_line: ${same.length} exact matches for "${find}" on page ${page ?? "any"} (ids ${describeIds(same)}). Pass id or itemIndex for one cell, or replace_text with all:true to change every match.`,
+    };
   }
 
-  // 3) substring match (e.g. find "Acme Corp" inside "Bill To: Acme Corp")
+  // 3) substring match
   const soft = textItems.filter((t) => onPage(t) && softFind(t));
-  if (!soft.length) return { target: null, warnings };
+  if (!soft.length) return { target: null, warnings, skipped: null };
   if (op.itemIndex != null && soft[op.itemIndex]) {
-    if (soft.length > 1) {
-      warnings.push(
-        `replace_line: ${soft.length} substring matches for "${find}" on page ${page ?? "any"}; used itemIndex=${op.itemIndex} (ids ${describe(soft)})`,
-      );
-    }
-    return { target: soft[op.itemIndex], warnings };
+    return { target: soft[op.itemIndex], warnings, skipped: null };
   }
-  if (soft.length === 1) return { target: soft[0], warnings };
-  // Prefer the shortest run (most specific) when ambiguous
-  const picked = soft.slice().sort((a, b) => a.str.length - b.str.length)[0];
-  warnings.push(
-    `replace_line: ${soft.length} substring matches for "${find}" on page ${page ?? "any"}; used shortest id #${picked.id} (ids ${describe(soft)}). Pass itemIndex or id to disambiguate.`,
-  );
-  return { target: picked, warnings };
+  if (soft.length === 1) return { target: soft[0], warnings, skipped: null };
+  return {
+    target: null,
+    warnings,
+    skipped: `SKIPPED replace_line: ${soft.length} substring matches for "${find}" on page ${page ?? "any"} (ids ${describeIds(soft)}). Pass id or itemIndex to disambiguate.`,
+  };
 }
 
-function pushFitWarnings(warnings, opLabel, metrics) {
-  if (!metrics) return;
-  if (metrics.hitFloor || metrics.stillOverflows) {
-    warnings.push(
-      `${opLabel}: text shrunk to ${metrics.size.toFixed(1)}pt` +
-        (metrics.stillOverflows
-          ? " and still wider than the original box"
-          : " to fit the original box") +
-        "; consider a shorter replacement or fit:false",
-    );
-  } else if (metrics.size < metrics.origSize - 1.5) {
-    warnings.push(
-      `${opLabel}: text shrunk from ${metrics.origSize.toFixed(1)}pt to ${metrics.size.toFixed(1)}pt to fit`,
-    );
+/**
+ * Decide whether to draw after measureFit.
+ * Returns { ok, size, refuseReason, metrics }.
+ */
+function decideFit(font, item, newText, op) {
+  const fit = op.fit !== false;
+  const force = op.force === true;
+  const metrics = measureFit(font, item, newText, fit);
+  if (!fit || !newText) {
+    return { ok: true, size: metrics.size, refuseReason: null, metrics };
   }
+  if (metrics.needsBelowReadable && !force) {
+    return {
+      ok: false,
+      size: metrics.size,
+      refuseReason: `SKIPPED: replacement needs ~${metrics.size.toFixed(1)}pt to fit (min readable ${FIT_MIN_READABLE_PT}pt). Shorten the text, use a wider field, or set force:true to allow crush.`,
+      metrics,
+    };
+  }
+  // force path: clamp draw size to absolute floor
+  let size = metrics.size;
+  if (force && size < FIT_ABSOLUTE_FLOOR_PT) size = FIT_ABSOLUTE_FLOOR_PT;
+  if (force && metrics.needsBelowReadable) {
+    // draw at min(readable floor attempt, absolute) — use computed size
+    size = Math.max(metrics.size, FIT_ABSOLUTE_FLOOR_PT);
+  }
+  return { ok: true, size, refuseReason: null, metrics, force };
 }
 
 /** Build replacement string: splice find→replace inside the run; never drop labels. */
@@ -698,11 +739,15 @@ export async function applyOperations(pdfBytes, operations) {
         case "replace_line": {
           const resolved = resolveLineTarget(textItems, op);
           warnings.push(...resolved.warnings);
+          if (resolved.skipped) {
+            warnings.push(resolved.skipped);
+            break;
+          }
           const target = resolved.target;
           if (!target) {
             warnings.push(
-              `replace_line: no match for "${op.find}" on page ${op.page}` +
-                (op.id != null ? ` (id #${op.id} ignored — text did not match)` : ""),
+              `SKIPPED replace_line: no match for "${op.find}" on page ${op.page}` +
+                (op.id != null ? ` (id #${op.id} text did not match find)` : ""),
             );
             break;
           }
@@ -718,14 +763,28 @@ export async function applyOperations(pdfBytes, operations) {
           const idx = pageIndex(target.page, doc.getPageCount());
           if (idx == null) break;
           const newStr = lineReplaceText(target.str, op.find, op.replace);
+          const decision = decideFit(font, target, newStr, op);
+          if (!decision.ok) {
+            warnings.push(
+              `replace_line #${target.id}: ${decision.refuseReason}`,
+            );
+            break;
+          }
           const metrics = coverAndWrite(doc.getPage(idx), font, target, newStr, {
             fit: op.fit !== false,
+            force: op.force === true,
+            forcedSize: decision.size,
+            measured: decision.metrics,
           });
-          pushFitWarnings(
-            warnings,
-            `replace_line #${target.id}`,
-            metrics,
-          );
+          if (op.force && decision.metrics?.needsBelowReadable) {
+            warnings.push(
+              `replace_line #${target.id}: force:true drew at ${metrics.size.toFixed(1)}pt (below ${FIT_MIN_READABLE_PT}pt readable min)`,
+            );
+          } else if (metrics.size < (decision.metrics?.origSize || metrics.size) - 1.5) {
+            warnings.push(
+              `replace_line #${target.id}: shrunk ${decision.metrics.origSize.toFixed(1)}pt → ${metrics.size.toFixed(1)}pt to fit`,
+            );
+          }
           applied.push(
             `replace_line #${target.id} p${target.page}: "${String(target.str).slice(0, 48)}" → "${String(newStr).slice(0, 48)}"`,
           );
@@ -734,18 +793,18 @@ export async function applyOperations(pdfBytes, operations) {
         case "replace_text": {
           const matches = findMatches(textItems, op.find, op.page);
           if (!matches.length) {
-            warnings.push(`replace_text: no match for "${op.find}"`);
+            warnings.push(`SKIPPED replace_text: no match for "${op.find}"`);
             break;
           }
-          const targets = op.all === false ? matches.slice(0, 1) : matches;
-          if (op.all === false && matches.length > 1) {
+          // Fail closed: multiple hits require all:true (every match) or use replace_line + id
+          if (matches.length > 1 && op.all !== true) {
             warnings.push(
-              `replace_text: ${matches.length} matches for "${op.find}"; all=false so only first was edited (ids ${matches
-                .slice(0, 8)
-                .map((m) => `#${m.id}`)
-                .join(", ")}${matches.length > 8 ? ", …" : ""}). Set all:true or pass replace_line with id/itemIndex.`,
+              `SKIPPED replace_text: ${matches.length} matches for "${op.find}" (ids ${describeIds(matches)}). Set all:true to change every occurrence, or use replace_line with id/itemIndex for one cell.`,
             );
+            break;
           }
+          const targets = matches;
+          let hit = 0;
           for (const m of targets) {
             const idx = pageIndex(m.page, doc.getPageCount());
             if (idx == null) continue;
@@ -756,14 +815,29 @@ export async function applyOperations(pdfBytes, operations) {
             } else {
               newStr = op.replace;
             }
+            const decision = decideFit(font, m, newStr, op);
+            if (!decision.ok) {
+              warnings.push(`replace_text #${m.id}: ${decision.refuseReason}`);
+              continue;
+            }
             const metrics = coverAndWrite(doc.getPage(idx), font, m, newStr, {
               fit: op.fit !== false,
+              force: op.force === true,
+              forcedSize: decision.size,
+              measured: decision.metrics,
             });
-            pushFitWarnings(warnings, `replace_text #${m.id}`, metrics);
+            if (op.force && decision.metrics?.needsBelowReadable) {
+              warnings.push(
+                `replace_text #${m.id}: force:true drew at ${metrics.size.toFixed(1)}pt`,
+              );
+            }
+            hit++;
           }
-          applied.push(
-            `replace_text "${op.find}" → "${op.replace}" (${targets.length} hits)`,
-          );
+          if (hit) {
+            applied.push(
+              `replace_text "${op.find}" → "${op.replace}" (${hit} hits)`,
+            );
+          }
           break;
         }
         case "cover": {
@@ -984,10 +1058,11 @@ Given a PDF content snapshot and a user instruction, output ONLY a JSON object (
 }
 
 Available operations (use only these):
-1. replace_line — PREFERRED. { "op":"replace_line", "page":1, "find":"exact snippet from the snapshot", "replace":"new snippet", "fit":true, "id"?: number, "itemIndex"?: number }
-   id is optional and only used when that run still contains find. Prefer find text over id.
-   If find appears many times (e.g. "$500.00" in a table), set id or itemIndex to the intended #id from the snapshot.
-2. replace_text — { "op":"replace_text", "find":"snippet", "replace":"new", "page"?:1, "all"?:true, "fit"?:true }
+1. replace_line — PREFERRED. { "op":"replace_line", "page":1, "find":"exact snippet", "replace":"new snippet", "fit":true, "id"?: number, "itemIndex"?: number, "force"?: false }
+   If find matches multiple runs, the op is SKIPPED unless id or itemIndex is set (fail closed).
+   force:true allows font crush below 8pt; otherwise too-long cell text is SKIPPED.
+2. replace_text — { "op":"replace_text", "find":"snippet", "replace":"new", "page"?:1, "all"?:true, "fit"?:true, "force"?:false }
+   Multiple matches require all:true or the op is SKIPPED.
 3. cover — visual whiteout only (NOT forensic redaction). { "op":"cover", "find":"text", "page"?:number }
 4. add_text — { "op":"add_text", "page":1, "x":number, "y":number, "text":"...", "size"?:12, "color"?:"#111111" }
 5. watermark — { "op":"watermark", "text":"CONFIDENTIAL", "opacity"?:0.15, "angle"?:-35, "size"?:48 }
@@ -998,8 +1073,9 @@ Available operations (use only these):
 10. draw_rect — { "op":"draw_rect", "page":1, "x":0, "y":0, "width":100, "height":20, "color"?:"#ffffff", "fill"?:true }
 
 Rules:
-- Prefer replace_line with exact find text from the snapshot. id/itemIndex required when find is repeated.
-- Never invent pages. Prefer short replacements that fit the original cell.
+- Prefer replace_line with find text + id when values repeat (tables). Never invent pages.
+- Prefer short replacements that fit; do not set force unless the user accepts tiny type.
+- Soft edit mode only: visual cover, not content-stream delete.
 - Only change what the user asked. Leave everything else untouched.
 - Always set "fit": true for text replacements.
 - Never invent pages. Output JSON only.`;
