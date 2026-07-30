@@ -28,6 +28,17 @@ https://martialgames.net/tools/patchpdf/
 This GitHub repo is the engine plus a **generic demo**. No LLC product icons
 are included on purpose.
 
+### Mobile — paused
+
+**Mobile / narrow viewports are not supported yet.** The hosted product shows a
+grayed **Coming soon** screen under ~900px width; the tools hub card is disabled
+the same way on phones. Line-level PDF editing still needs a larger screen and is
+**not fully implemented** for touch layouts.
+
+Use a desktop or laptop browser for the official tool and for this demo. A real
+mobile editor is paused until that UX is designed and shipped — do not treat
+phone use as supported.
+
 ## Run the demo
 
 ```bash
