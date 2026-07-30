@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="en">
+<!--
+  patchpdf — surgical PDF editor (browser-side)
+  Copyright (c) 2026 Martial Systems LLC. All rights reserved.
+  Own tool chrome — not the Martial Games portal skin.
+-->
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>patchpdf — surgical PDF editor</title>
+  <meta
+    name="description"
+    content="Edit PDF text in place, export Word, optional AI planning. Runs in your browser — files stay on your device."
+  />
+  <meta name="theme-color" content="#0c0d10" />
+  <link rel="icon" href="../../favicon.svg" type="image/svg+xml" />
+  <link rel="stylesheet" href="app.css?v=1" />
+</head>
+<body>
+  <div class="app" id="app">
+    <header class="app-header">
+      <div class="app-header-inner">
+        <div>
+          <p class="eyebrow">Martial Systems LLC · tool</p>
+          <h1>patchpdf</h1>
+        </div>
+        <p class="header-tag">
+          Surgical PDF edits without regenerating the whole file. Line editor,
+          optional AI plan, DOCX export — all in your browser.
+        </p>
+        <nav class="header-links" aria-label="Martial Games">
+          <a class="exit-link" href="/">Home</a>
+          <a class="exit-link" href="/#games">More games</a>
+          <a class="exit-link" href="/tools/">Tools</a>
+        </nav>
+      </div>
+    </header>
+
+    <main class="app-main">
+      <!-- Left: controls -->
+      <section class="panel" aria-label="Editor">
+        <div class="tabs" role="tablist">
+          <button type="button" class="tab" id="tab-safe" role="tab" aria-selected="true">
+            Line edit
+          </button>
+          <button type="button" class="tab" id="tab-ai" role="tab" aria-selected="false">
+            AI command
+          </button>
+        </div>
+
+        <div id="msg" class="msg" hidden></div>
+
+        <div class="section">
+          <div class="section-hd">PDF</div>
+          <div class="section-bd stack">
+            <div class="row">
+              <label class="file-btn">
+                <span id="file-label">Choose PDF</span>
+                <input id="file-input" type="file" accept="application/pdf,.pdf" />
+              </label>
+              <button type="button" class="btn" id="btn-sample">Sample invoice</button>
+            </div>
+            <p class="hint" id="status-lines">
+              PDFs are parsed and rewritten locally. Nothing is uploaded for editing.
+            </p>
+          </div>
+        </div>
+
+        <!-- Safe tab -->
+        <div id="panel-safe">
+          <div class="section">
+            <div class="section-hd">
+              <span>Metadata</span>
+            </div>
+            <div class="section-bd">
+              <div class="row">
+                <label class="field">Title
+                  <input type="text" id="meta-title" autocomplete="off" />
+                </label>
+                <label class="field">Author
+                  <input type="text" id="meta-author" autocomplete="off" />
+                </label>
+                <label class="field">Subject
+                  <input type="text" id="meta-subject" autocomplete="off" />
+                </label>
+              </div>
+            </div>
+          </div>
+
+          <div class="section">
+            <div class="section-hd">
+              <span>Text lines</span>
+              <span class="badge" id="dirty-badge" hidden>0 changed</span>
+            </div>
+            <div class="section-bd stack">
+              <div class="row">
+                <label class="field" style="flex:0 0 8rem">Page
+                  <select id="page-filter">
+                    <option value="all">All pages</option>
+                  </select>
+                </label>
+                <label class="field">Search
+                  <input type="search" id="line-query" placeholder="Filter lines…" />
+                </label>
+                <label class="field" style="flex:0 0 auto; flex-direction:row; align-items:center; gap:0.4rem; padding-top:1.2rem">
+                  <input type="checkbox" id="dirty-only" />
+                  Changed only
+                </label>
+              </div>
+              <div class="line-list" id="line-list"></div>
+              <div class="row">
+                <button type="button" class="btn btn-primary" id="btn-apply-lines">
+                  Apply line edits
+                </button>
+                <button type="button" class="btn btn-ghost" id="btn-reset-lines">Reset</button>
+              </div>
+              <p class="hint">
+                Edits cover the original glyphs and redraw text in place (Helvetica).
+                Best for short field changes on text PDFs — not scanned images.
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <!-- AI tab -->
+        <div id="panel-ai" hidden>
+          <div class="section">
+            <div class="section-hd">Instruction</div>
+            <div class="section-bd stack">
+              <textarea
+                id="instruction"
+                placeholder='e.g. replace "Acme Corp" with "Contoso"'
+              >replace "Acme Corp" with "Contoso"</textarea>
+              <div class="row" id="presets">
+                <button type="button" class="btn btn-ghost" data-preset='replace "Acme Corp" with "Contoso"'>
+                  Acme → Contoso
+                </button>
+                <button type="button" class="btn btn-ghost" data-preset='watermark "CONFIDENTIAL"'>
+                  Watermark
+                </button>
+                <button type="button" class="btn btn-ghost" data-preset="delete pages 2">
+                  Delete p.2
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div class="section">
+            <div class="section-hd">Provider</div>
+            <div class="section-bd stack">
+              <label class="field">Profile
+                <select id="profile"></select>
+              </label>
+              <label class="field">API key (stays in this browser session)
+                <input type="password" id="api-key" autocomplete="off" spellcheck="false" />
+              </label>
+              <label class="field" style="flex-direction:row; align-items:center; gap:0.4rem">
+                <input type="checkbox" id="show-key" data-keep-enabled="1" />
+                Show key
+              </label>
+              <div id="custom-fields" class="stack" hidden>
+                <label class="field">Base URL
+                  <input type="text" id="custom-base" placeholder="https://…/v1" />
+                </label>
+                <label class="field">Model
+                  <input type="text" id="custom-model" placeholder="model-id" />
+                </label>
+              </div>
+              <p class="hint">
+                <strong>Local patterns</strong> need no key.
+                Cloud providers use a same-origin proxy so your key is not stored
+                on our servers — only forwarded to the provider you pick.
+                PDF bytes never leave your device for planning: only the text
+                snapshot is sent to the model you choose.
+              </p>
+              <div class="row">
+                <button type="button" class="btn" id="btn-plan">Plan only</button>
+                <button type="button" class="btn btn-primary" id="btn-run-ai">
+                  Plan + apply
+                </button>
+                <button type="button" class="btn btn-ghost" id="btn-apply-plan" disabled>
+                  Apply plan
+                </button>
+              </div>
+              <div class="plan-box" id="plan-box" aria-label="Edit plan JSON"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="section">
+          <div class="section-hd">Result</div>
+          <div class="section-bd">
+            <div class="plan-box" id="result-box" style="min-height:3rem"></div>
+          </div>
+        </div>
+
+        <p class="footer-note">
+          <strong>Privacy:</strong> extract / apply / DOCX run entirely in your browser
+          (pdf.js + pdf-lib). There is no server character quota on the document —
+          only a soft 400k-char prompt budget when you use AI, so provider APIs stay happy.
+          Visual “cover” is not forensic redaction.
+          Open-source-ready lib lives in this folder (<code>engine.js</code>).
+        </p>
+      </section>
+
+      <!-- Right: preview -->
+      <section class="panel" aria-label="Preview">
+        <div class="toolbar">
+          <button type="button" class="btn" id="btn-preview-orig" aria-pressed="true">Original</button>
+          <button type="button" class="btn" id="btn-preview-edited" aria-pressed="false" disabled>
+            Edited
+          </button>
+          <button type="button" class="btn btn-primary" id="btn-download" disabled>
+            Download PDF
+          </button>
+          <button type="button" class="btn" id="btn-docx">Export DOCX</button>
+        </div>
+        <iframe
+          class="preview-frame"
+          id="preview-frame"
+          title="PDF preview"
+          hidden
+        ></iframe>
+        <p class="hint" style="margin-top:0.5rem">
+          Preview uses the browser’s built-in PDF viewer. Download to verify in another app.
+        </p>
+      </section>
+    </main>
+  </div>
+
+  <script type="module" src="app.js?v=1"></script>
+</body>
+</html>
