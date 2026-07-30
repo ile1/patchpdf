@@ -11,7 +11,7 @@ import {
   editPdf,
   exportPdfToDocx,
   BUILTIN_PROFILES,
-} from "./engine.js";
+} from "./engine.js?v=3";
 
 const $ = (sel, el = document) => el.querySelector(sel);
 const $$ = (sel, el = document) => [...el.querySelectorAll(sel)];
@@ -209,7 +209,7 @@ async function loadPdf(bytes, name) {
 
   renderLines();
   setPreview("original");
-  els.statusLines.textContent = `${snap.pageCount} page(s) · ${state.lines.length} text runs · all processing stays in your browser`;
+  els.statusLines.textContent = `${snap.pageCount} page(s) · ${state.lines.length} runs · patched on this device, not rebuilt`;
   setMsg(null);
   els.resultBox.textContent = "";
 }
@@ -429,8 +429,11 @@ async function exportDocx() {
       "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     );
     setMsg(
-      `DOCX: ${result.pages} page(s), ${result.lines} line(s).` +
-        (result.warnings.length ? " " + result.warnings.join(" ") : ""),
+      `Word map: ${result.pages} page(s), ${result.lines} line(s) from the PDF’s own text geometry. ` +
+        `No rewrite — download the PDF when layout has to stay exact.` +
+        (result.warnings.length
+          ? " " + result.warnings.join(" ")
+          : ""),
       "ok",
     );
   } catch (e) {

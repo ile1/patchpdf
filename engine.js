@@ -18,6 +18,13 @@ import {
   Packer,
   Paragraph,
   TextRun,
+  AlignmentType,
+  Table,
+  TableRow,
+  TableCell,
+  WidthType,
+  BorderStyle,
+  VerticalAlign,
 } from "https://cdn.jsdelivr.net/npm/docx@9.5.1/+esm";
 
 pdfjs.GlobalWorkerOptions.workerSrc =
@@ -1056,9 +1063,23 @@ export async function editPdf({
   );
 }
 
-/* ─── DOCX export (layout-approx) ─── */
+/* ─── DOCX export (geometry → Word; never invents content) ───
+ *
+ * Only text that exists in the PDF is emitted. Layout is inferred from
+ * measured positions: page size, margins, vertical gaps, horizontal gaps
+ * (2-column tables when a baseline has a wide split), font-size hierarchy
+ * relative to the page median, and label/value bolding from original strings.
+ *
+ * Does NOT regenerate prose. Does NOT call an LLM.
+ */
 
 const PT_TO_TWIP = 20;
+const NO_BORDER = {
+  top: { style: BorderStyle.NONE, size: 0, color: "FFFFFF" },
+  bottom: { style: BorderStyle.NONE, size: 0, color: "FFFFFF" },
+  left: { style: BorderStyle.NONE, size: 0, color: "FFFFFF" },
+  right: { style: BorderStyle.NONE, size: 0, color: "FFFFFF" },
+};
 
 function groupIntoLines(items, page) {
   const pageItems = items
@@ -1074,9 +1095,14 @@ function groupIntoLines(items, page) {
     const threshold = Math.max(3, (it.fontSize || 12) * 0.45);
     const last = lines[lines.length - 1];
     if (last && Math.abs(last.y - it.y) <= threshold) {
-      last.runs.push({ str: it.str, x: it.x, fontSize: it.fontSize || 12 });
+      last.runs.push({
+        str: it.str,
+        x: it.x,
+        width: it.width || 0,
+        fontSize: it.fontSize || 12,
+      });
       last.minX = Math.min(last.minX, it.x);
-      last.maxX = Math.max(last.maxX, it.x + it.width);
+      last.maxX = Math.max(last.maxX, it.x + (it.width || 0));
       last.fontSize = Math.max(last.fontSize, it.fontSize || 12);
       last.y = (last.y + it.y) / 2;
     } else {
@@ -1085,8 +1111,15 @@ function groupIntoLines(items, page) {
         y: it.y,
         fontSize: it.fontSize || 12,
         minX: it.x,
-        maxX: it.x + it.width,
-        runs: [{ str: it.str, x: it.x, fontSize: it.fontSize || 12 }],
+        maxX: it.x + (it.width || 0),
+        runs: [
+          {
+            str: it.str,
+            x: it.x,
+            width: it.width || 0,
+            fontSize: it.fontSize || 12,
+          },
+        ],
       });
     }
   }
@@ -1094,11 +1127,245 @@ function groupIntoLines(items, page) {
   return lines;
 }
 
+function estimateWidth(str, fontSize) {
+  return str.length * fontSize * 0.5;
+}
+
+function median(nums) {
+  if (!nums.length) return 11;
+  const s = [...nums].sort((a, b) => a - b);
+  const m = Math.floor(s.length / 2);
+  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+}
+
+/** Split a baseline into left/right columns when a large X gap exists. */
+function splitLineColumns(line) {
+  const runs = line.runs;
+  if (runs.length < 2) return null;
+  let bestI = -1;
+  let bestGap = 0;
+  for (let i = 0; i < runs.length - 1; i++) {
+    const left = runs[i];
+    const right = runs[i + 1];
+    const leftEnd =
+      left.x + (left.width > 1 ? left.width : estimateWidth(left.str, left.fontSize));
+    const gap = right.x - leftEnd;
+    if (gap > bestGap) {
+      bestGap = gap;
+      bestI = i;
+    }
+  }
+  // Wide enough gap = two visual columns on the same baseline
+  if (bestI < 0 || bestGap < Math.max(28, line.fontSize * 2.2)) return null;
+  const leftRuns = runs.slice(0, bestI + 1);
+  const rightRuns = runs.slice(bestI + 1);
+  return { leftRuns, rightRuns, gap: bestGap };
+}
+
+function joinRunsText(runs) {
+  if (!runs.length) return { text: "", fontSize: 11 };
+  let text = runs[0].str;
+  let fontSize = runs[0].fontSize || 12;
+  let xEnd =
+    runs[0].x +
+    (runs[0].width > 1
+      ? runs[0].width
+      : estimateWidth(runs[0].str, runs[0].fontSize));
+  for (let i = 1; i < runs.length; i++) {
+    const r = runs[i];
+    const gap = r.x - xEnd;
+    const needSpace =
+      gap > (r.fontSize || 12) * 0.15 &&
+      !text.endsWith(" ") &&
+      !r.str.startsWith(" ");
+    text += (needSpace ? " " : "") + r.str;
+    fontSize = Math.max(fontSize, r.fontSize || 12);
+    xEnd =
+      r.x + (r.width > 1 ? r.width : estimateWidth(r.str, r.fontSize || 12));
+  }
+  return { text, fontSize };
+}
+
+/** Label/value heuristics from the *original* string only. */
+function styleFromText(text, fontSize, bodyMedian) {
+  const t = text.trim();
+  const ratio = fontSize / (bodyMedian || 11);
+  const isTitle =
+    ratio >= 1.45 && t.length > 0 && t.length < 48 && !/[.!?]$/.test(t);
+  const isSub =
+    !isTitle && ratio >= 1.15 && t.length > 0 && t.length < 72;
+  const labelMatch = t.match(
+    /^((?:Bill\s*To|Ship\s*To|Invoice\s*#?|Date|Amount|Total|Subtotal|Description|From|To|Attn|Account|PO|Order)[:\s#-]*)(.*)$/i,
+  );
+  const money = /^\$?[\d,]+\.\d{2}$/.test(t) || /^Amount:/i.test(t);
+  const allCaps =
+    t.length >= 3 &&
+    t.length <= 40 &&
+    t === t.toUpperCase() &&
+    /[A-Z]/.test(t) &&
+    !/\d{4}/.test(t);
+
+  let bold = isTitle || isSub || allCaps || money;
+  let sizeHalfPts = Math.max(16, Math.round(fontSize * 2));
+  if (isTitle) sizeHalfPts = Math.max(sizeHalfPts, Math.round(bodyMedian * 2 * 1.65));
+  if (labelMatch && labelMatch[1] && labelMatch[2] !== undefined) {
+    return {
+      parts: [
+        {
+          text: labelMatch[1],
+          bold: true,
+          size: sizeHalfPts,
+          font: "Helvetica",
+        },
+        {
+          text: labelMatch[2],
+          bold: money,
+          size: sizeHalfPts,
+          font: money ? "Courier New" : "Helvetica",
+        },
+      ],
+    };
+  }
+  return {
+    parts: [
+      {
+        text: t,
+        bold,
+        size: sizeHalfPts,
+        font: money ? "Courier New" : "Helvetica",
+      },
+    ],
+  };
+}
+
+function runsToParagraphChildren(text, fontSize, bodyMedian) {
+  const styled = styleFromText(text, fontSize, bodyMedian);
+  return styled.parts
+    .filter((p) => p.text != null && p.text !== "")
+    .map(
+      (p) =>
+        new TextRun({
+          text: p.text,
+          bold: p.bold,
+          size: p.size,
+          font: p.font,
+        }),
+    );
+}
+
+function spacingBeforeFromGap(prevY, line) {
+  if (prevY == null) return 0;
+  const gap = prevY - line.y - line.fontSize;
+  if (gap <= 2) return 0;
+  // Map PDF gap → Word twips; clamp so invoices don't explode
+  return Math.round(Math.min(56, Math.max(0, gap * 0.95)) * PT_TO_TWIP);
+}
+
+function lineToBlock(line, prevY, pageWidth, leftMarginPt, contentWidthTwips, bodyMedian) {
+  const indentPt = Math.max(0, line.minX - leftMarginPt);
+  const indentTwips = Math.round(Math.min(indentPt, pageWidth * 0.5) * PT_TO_TWIP);
+  const before = spacingBeforeFromGap(prevY, line);
+  const cols = splitLineColumns(line);
+
+  if (cols) {
+    const left = joinRunsText(cols.leftRuns);
+    const right = joinRunsText(cols.rightRuns);
+    const leftW = Math.max(
+      1200,
+      Math.round((contentWidthTwips || 9000) * 0.48),
+    );
+    const rightW = Math.max(1200, (contentWidthTwips || 9000) - leftW);
+    const cellPara = (side, align) =>
+      new Paragraph({
+        children: runsToParagraphChildren(side.text, side.fontSize, bodyMedian),
+        alignment: align,
+        spacing: {
+          before: 0,
+          after: Math.round(line.fontSize * 0.2 * PT_TO_TWIP),
+          line: Math.round(Math.max(line.fontSize * 1.25, 12) * PT_TO_TWIP),
+          lineRule: "auto",
+        },
+      });
+    return new Table({
+      width: { size: contentWidthTwips || leftW + rightW, type: WidthType.DXA },
+      columnWidths: [leftW, rightW],
+      rows: [
+        new TableRow({
+          children: [
+            new TableCell({
+              borders: NO_BORDER,
+              width: { size: leftW, type: WidthType.DXA },
+              verticalAlign: VerticalAlign.CENTER,
+              children: [cellPara(left, AlignmentType.LEFT)],
+            }),
+            new TableCell({
+              borders: NO_BORDER,
+              width: { size: rightW, type: WidthType.DXA },
+              verticalAlign: VerticalAlign.CENTER,
+              children: [cellPara(right, AlignmentType.RIGHT)],
+            }),
+          ],
+        }),
+      ],
+    });
+  }
+
+  const joined = joinRunsText(line.runs);
+  const contentMid = (line.minX + line.maxX) / 2;
+  let alignment = AlignmentType.LEFT;
+  if (line.minX > pageWidth * 0.48 && line.maxX > pageWidth * 0.72) {
+    alignment = AlignmentType.RIGHT;
+  } else if (
+    Math.abs(contentMid - pageWidth / 2) < pageWidth * 0.1 &&
+    line.minX > leftMarginPt + 36 &&
+    joined.text.length < 48
+  ) {
+    alignment = AlignmentType.CENTER;
+  }
+
+  const ratio = joined.fontSize / (bodyMedian || 11);
+  const isTitle = ratio >= 1.45 && joined.text.length < 48;
+
+  return new Paragraph({
+    children: runsToParagraphChildren(
+      joined.text,
+      joined.fontSize,
+      bodyMedian,
+    ),
+    spacing: {
+      before: isTitle ? before || Math.round(6 * PT_TO_TWIP) : before,
+      after: Math.round((isTitle ? 8 : line.fontSize * 0.22) * PT_TO_TWIP),
+      line: Math.round(
+        Math.max(line.fontSize * (isTitle ? 1.3 : 1.22), 12) * PT_TO_TWIP,
+      ),
+      lineRule: "auto",
+    },
+    indent:
+      alignment === AlignmentType.LEFT && indentTwips > 36
+        ? { left: indentTwips }
+        : undefined,
+    alignment,
+  });
+}
+
+/**
+ * @param {Uint8Array} pdfBytes
+ * @param {{ title?: string, author?: string, subject?: string, mode?: "layout" }} [options]
+ */
 export async function exportPdfToDocx(pdfBytes, options = {}) {
   const warnings = [];
+  const mode = options.mode || "layout";
   const snapshot = await extractSnapshot(pdfBytes);
-  if (!snapshot.textItems.length) {
-    warnings.push("Little positioned text — export may be plain per page.");
+
+  if (!snapshot.textItems.length && snapshot.fullText) {
+    warnings.push(
+      "No positioned runs — fell back to plain page text (still original wording).",
+    );
+  }
+  if (!snapshot.textItems.length && !(snapshot.fullText || "").trim()) {
+    warnings.push(
+      "Little or no extractable text (scan?). Word export needs real text runs.",
+    );
   }
 
   const sections = [];
@@ -1106,55 +1373,113 @@ export async function exportPdfToDocx(pdfBytes, options = {}) {
 
   for (let p = 1; p <= snapshot.pageCount; p++) {
     const size = snapshot.pageSizes[p - 1] || { width: 612, height: 792 };
+    const pageWidth = size.width;
+    const pageHeight = size.height;
+
+    const pageItems = snapshot.textItems.filter((t) => t.page === p);
+    let leftMargin = 54;
+    let rightMargin = 54;
+    let topMargin = 54;
+    let bottomMargin = 54;
+
+    if (pageItems.length) {
+      const minX = Math.min(...pageItems.map((t) => t.x));
+      const maxX = Math.max(...pageItems.map((t) => t.x + (t.width || 0)));
+      const maxY = Math.max(
+        ...pageItems.map((t) => t.y + (t.fontSize || 12)),
+      );
+      const minY = Math.min(...pageItems.map((t) => t.y));
+      leftMargin = Math.max(36, Math.min(120, minX));
+      rightMargin = Math.max(36, Math.min(120, pageWidth - maxX));
+      topMargin = Math.max(36, Math.min(120, pageHeight - maxY));
+      bottomMargin = Math.max(36, Math.min(120, minY));
+    }
+
+    const contentWidthTwips = Math.round(
+      Math.max(200, pageWidth - leftMargin - rightMargin) * PT_TO_TWIP,
+    );
+    const bodyMedian = median(
+      pageItems.map((t) => t.fontSize || 11).filter((n) => n >= 7 && n <= 18),
+    );
+
+    let children = [];
     const lines = groupIntoLines(snapshot.textItems, p);
-    const children = [];
 
     if (lines.length) {
+      let prevY = null;
       for (const line of lines) {
-        const text = line.runs.map((r) => r.str).join(" ");
-        children.push(
-          new Paragraph({
-            children: [
-              new TextRun({
-                text,
-                size: Math.max(14, Math.round(line.fontSize * 2)),
-                font: "Helvetica",
-              }),
-            ],
-            spacing: { after: 60, line: 276, lineRule: "auto" },
-          }),
+        // Invisible border-width table needs a wrapping paragraph spacing —
+        // insert a thin spacer paragraph when vertical gap is large and next is a table
+        const block = lineToBlock(
+          line,
+          prevY,
+          pageWidth,
+          leftMargin,
+          contentWidthTwips,
+          bodyMedian,
         );
+        const isTable =
+          block &&
+          (block instanceof Table ||
+            block.constructor?.name === "Table" ||
+            typeof block.rootKey === "string");
+        if (isTable && prevY != null) {
+          const gapTwips = spacingBeforeFromGap(prevY, line);
+          if (gapTwips > 40) {
+            children.push(
+              new Paragraph({
+                children: [new TextRun({ text: "" })],
+                spacing: { before: 0, after: gapTwips },
+              }),
+            );
+          }
+        }
+        children.push(block);
+        prevY = line.y;
         totalLines++;
       }
     } else {
-      const text = snapshot.textByPage[p - 1] || "";
-      for (const pl of text.split(/\r?\n/)) {
+      const text =
+        snapshot.textByPage[p - 1] ||
+        (p === 1 ? snapshot.fullText : "") ||
+        "";
+      const plainLines = text.split(/\r?\n/);
+      if (!plainLines.length || (plainLines.length === 1 && !plainLines[0])) {
         children.push(
-          new Paragraph({
-            children: [new TextRun({ text: pl, size: 22, font: "Helvetica" })],
-            spacing: { after: 60 },
-          }),
+          new Paragraph({ children: [new TextRun({ text: "" })] }),
         );
-        totalLines++;
+      } else {
+        for (const pl of plainLines) {
+          children.push(
+            new Paragraph({
+              children: runsToParagraphChildren(pl, 11, 11),
+              spacing: { after: 80, line: 276, lineRule: "auto" },
+            }),
+          );
+          totalLines++;
+        }
+      }
+      if (!text.trim()) {
+        warnings.push(`Page ${p}: empty or image-only.`);
       }
     }
 
     if (!children.length) {
-      children.push(new Paragraph({ children: [new TextRun({ text: "" })] }));
+      children = [new Paragraph({ children: [new TextRun({ text: "" })] })];
     }
 
     sections.push({
       properties: {
         page: {
           size: {
-            width: Math.round(size.width * PT_TO_TWIP),
-            height: Math.round(size.height * PT_TO_TWIP),
+            width: Math.round(pageWidth * PT_TO_TWIP),
+            height: Math.round(pageHeight * PT_TO_TWIP),
           },
           margin: {
-            top: Math.round(54 * PT_TO_TWIP),
-            bottom: Math.round(54 * PT_TO_TWIP),
-            left: Math.round(54 * PT_TO_TWIP),
-            right: Math.round(54 * PT_TO_TWIP),
+            top: Math.round(topMargin * PT_TO_TWIP),
+            bottom: Math.round(bottomMargin * PT_TO_TWIP),
+            left: Math.round(leftMargin * PT_TO_TWIP),
+            right: Math.round(rightMargin * PT_TO_TWIP),
           },
         },
       },
@@ -1165,10 +1490,23 @@ export async function exportPdfToDocx(pdfBytes, options = {}) {
   const doc = new Document({
     creator: options.author || snapshot.metadata.author || "patchpdf",
     title: options.title || snapshot.metadata.title || "Exported from PDF",
-    description: options.subject || snapshot.metadata.subject || "patchpdf export",
+    description:
+      options.subject ||
+      snapshot.metadata.subject ||
+      "Geometry-mapped export from patchpdf (original wording only)",
     sections: sections.length
       ? sections
-      : [{ children: [new Paragraph({ children: [new TextRun({ text: "(empty)" })] })] }],
+      : [
+          {
+            children: [
+              new Paragraph({
+                children: [
+                  new TextRun({ text: "(empty document)", italics: true }),
+                ],
+              }),
+            ],
+          },
+        ],
   });
 
   const blob = await Packer.toBlob(doc);
@@ -1177,7 +1515,7 @@ export async function exportPdfToDocx(pdfBytes, options = {}) {
     bytes: new Uint8Array(ab),
     pages: snapshot.pageCount,
     lines: totalLines,
-    mode: "layout",
+    mode,
     warnings,
   };
 }
