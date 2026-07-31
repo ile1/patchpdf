@@ -25,8 +25,12 @@ Hosted build (branded UI, private site APIs):
 
 https://martialgames.net/tools/patchpdf/
 
-This GitHub repo is the engine plus a **generic demo**. No LLC product icons
-are included on purpose.
+**Wiki** (download, editor, engine, agent API, troubleshooting):  
+https://github.com/martialsystems/patchpdf/wiki  
+
+This GitHub repo is the engine plus a **generic demo** (partially open source).  
+No LLC product icons are included on purpose. Production hosting stays on
+[Martial Games](https://martialgames.net/).
 
 ### Mobile — paused
 
