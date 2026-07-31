@@ -31,6 +31,9 @@ https://github.com/martialsystems/patchpdf/wiki
 **Known limits + please file issues:**  
 https://github.com/martialsystems/patchpdf/wiki/Known-Limits  
 
+**Support Martial Games (optional):**  
+https://ko-fi.com/martialgames  
+
 This GitHub repo is the engine plus a **generic demo** (partially open source).  
 No LLC product icons are included on purpose. Production hosting stays on
 [Martial Games](https://martialgames.net/). Real PDFs from outsiders beat
