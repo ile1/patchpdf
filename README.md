@@ -77,12 +77,20 @@ const result = await applyOperations(bytes, [
 // result.bytes → save as PDF
 ```
 
+### Agents / scripts (no UI)
+
+Prefer **patch over regenerate** for fact/label fixes. Use the programmatic helpers
+(`buildPatchmap`, `patchPdfAgent`, `verifyPdfText`, `applyOperations` with
+`failOnSkip`). The human demo UI does **not** surface these — see
+**[AGENT_API.md](./AGENT_API.md)**.
+
 ## Files
 
 | File | Role |
 |------|------|
-| `engine.js` | Extract, validate, apply, optional AI plan, DOCX map |
-| `app.js` / `index.html` / `app.css` | Generic demo shell |
+| `engine.js` | Extract, validate, apply, agent API, optional AI plan, DOCX map |
+| `AGENT_API.md` | Agent/programmatic API (not human UI) |
+| `app.js` / `index.html` / `app.css` | Generic demo shell (unchanged chrome) |
 | `sample-invoice.pdf` | Dummy invoice for local tests |
 | `TRADEMARK.md` | What MIT does not cover |
 | `LICENSE` / `NOTICE` | Legal |

@@ -173,15 +173,21 @@ const MAX_OPS = 200;
 
 /**
  * Validate and normalize plan operations. Rejects unknown shapes.
+ * @param {unknown} rawOps
+ * @param {{ maxOps?: number }} [options] Agent/API only — browser UI ignores.
  * @returns {{ operations: object[], warnings: string[] }}
  */
-export function validateOperations(rawOps) {
+export function validateOperations(rawOps, options = {}) {
   const warnings = [];
   if (!Array.isArray(rawOps)) {
     throw new Error("Plan operations must be an array");
   }
-  if (rawOps.length > MAX_OPS) {
-    throw new Error(`Too many operations (${rawOps.length}); max ${MAX_OPS}`);
+  const maxOps = options.maxOps != null ? Number(options.maxOps) : MAX_OPS;
+  if (!Number.isFinite(maxOps) || maxOps < 1) {
+    throw new Error("maxOps must be a positive number");
+  }
+  if (rawOps.length > maxOps) {
+    throw new Error(`Too many operations (${rawOps.length}); max ${maxOps}`);
   }
   const operations = [];
   for (let i = 0; i < rawOps.length; i++) {
@@ -721,10 +727,29 @@ function lineReplaceText(runStr, find, replace) {
   return r;
 }
 
-export async function applyOperations(pdfBytes, operations) {
-  const { operations: ops, warnings: valWarnings } = validateOperations(operations);
+/**
+ * Apply surgical ops to a PDF.
+ *
+ * @param {Uint8Array} pdfBytes
+ * @param {object[]} operations
+ * @param {object} [options] **Agent / programmatic API only** (human UI passes nothing).
+ * @param {boolean} [options.failOnSkip=false] Throw if any SKIPPED / refused op
+ * @param {number} [options.maxOps] Cap op count (default 200)
+ * @param {number} [options.requireApplied] Require at least N applied ops
+ * @param {boolean} [options.preserveFontMetrics=true] Prefer not shrinking below ~1.5pt of original without force (soft mode already enforces 8pt floor)
+ * @returns {Promise<{ bytes: Uint8Array, applied: string[], warnings: string[], skipped: string[] }>}
+ */
+export async function applyOperations(pdfBytes, operations, options = {}) {
+  const failOnSkip = options.failOnSkip === true;
+  const requireApplied =
+    options.requireApplied != null ? Number(options.requireApplied) : null;
+  const { operations: ops, warnings: valWarnings } = validateOperations(
+    operations,
+    { maxOps: options.maxOps },
+  );
   const applied = [];
   const warnings = [...valWarnings];
+  const skipped = [];
 
   const snapshot = await extractSnapshot(pdfBytes);
   const textItems = snapshot.textItems;
@@ -745,14 +770,16 @@ export async function applyOperations(pdfBytes, operations) {
           warnings.push(...resolved.warnings);
           if (resolved.skipped) {
             warnings.push(resolved.skipped);
+            skipped.push(resolved.skipped);
             break;
           }
           const target = resolved.target;
           if (!target) {
-            warnings.push(
+            const msg =
               `SKIPPED replace_line: no match for "${op.find}" on page ${op.page}` +
-                (op.id != null ? ` (id #${op.id} text did not match find)` : ""),
-            );
+              (op.id != null ? ` (id #${op.id} text did not match find)` : "");
+            warnings.push(msg);
+            skipped.push(msg);
             break;
           }
           if (
@@ -769,9 +796,9 @@ export async function applyOperations(pdfBytes, operations) {
           const newStr = lineReplaceText(target.str, op.find, op.replace);
           const decision = decideFit(font, target, newStr, op);
           if (!decision.ok) {
-            warnings.push(
-              `replace_line #${target.id}: ${decision.refuseReason}`,
-            );
+            const msg = `SKIPPED replace_line #${target.id}: ${decision.refuseReason}`;
+            warnings.push(msg);
+            skipped.push(msg);
             break;
           }
           const metrics = coverAndWrite(doc.getPage(idx), font, target, newStr, {
@@ -797,14 +824,17 @@ export async function applyOperations(pdfBytes, operations) {
         case "replace_text": {
           const matches = findMatches(textItems, op.find, op.page);
           if (!matches.length) {
-            warnings.push(`SKIPPED replace_text: no match for "${op.find}"`);
+            const msg = `SKIPPED replace_text: no match for "${op.find}"`;
+            warnings.push(msg);
+            skipped.push(msg);
             break;
           }
           // Fail closed: multiple hits require all:true (every match) or use replace_line + id
           if (matches.length > 1 && op.all !== true) {
-            warnings.push(
-              `SKIPPED replace_text: ${matches.length} matches for "${op.find}" (ids ${describeIds(matches)}). Set all:true to change every occurrence, or use replace_line with id/itemIndex for one cell.`,
-            );
+            const msg =
+              `SKIPPED replace_text: ${matches.length} matches for "${op.find}" (ids ${describeIds(matches)}). Set all:true to change every occurrence, or use replace_line with id/itemIndex for one cell.`;
+            warnings.push(msg);
+            skipped.push(msg);
             break;
           }
           const targets = matches;
@@ -1003,10 +1033,169 @@ export async function applyOperations(pdfBytes, operations) {
   }
 
   const bytes = await doc.save();
-  return { bytes, applied, warnings };
+
+  // Also count soft SKIPPED strings that weren't tracked above
+  for (const w of warnings) {
+    if (typeof w === "string" && w.includes("SKIPPED") && !skipped.includes(w)) {
+      skipped.push(w);
+    }
+  }
+
+  if (requireApplied != null && applied.length < requireApplied) {
+    const err = new Error(
+      `requireApplied=${requireApplied} but only ${applied.length} applied. skipped=${skipped.length}`,
+    );
+    err.patchpdf = { applied, warnings, skipped };
+    throw err;
+  }
+  if (failOnSkip && skipped.length) {
+    const err = new Error(
+      `failOnSkip: ${skipped.length} op(s) skipped. First: ${skipped[0]}`,
+    );
+    err.patchpdf = { applied, warnings, skipped };
+    throw err;
+  }
+
+  return { bytes, applied, warnings, skipped };
 }
 
-/* ─── Local patterns ─── */
+/* ─── Agent / programmatic API (not used by the human demo UI) ─── */
+
+/**
+ * Stable line map for agents: id + page + text + box + font size.
+ * Prefer this over re-extracting ad hoc every time.
+ *
+ * @param {Uint8Array} pdfBytes
+ * @param {{ maxStr?: number }} [options]
+ * @returns {Promise<object>}
+ */
+export async function buildPatchmap(pdfBytes, options = {}) {
+  const maxStr = options.maxStr != null ? Number(options.maxStr) : 500;
+  const snap = await extractSnapshot(pdfBytes);
+  const lines = (snap.textItems || []).map((t) => ({
+    id: t.id,
+    page: t.page,
+    str: String(t.str || "").slice(0, maxStr),
+    x: round4(t.x),
+    y: round4(t.y),
+    width: round4(t.width),
+    height: round4(t.height ?? t.fontSize),
+    fontSize: round4(t.fontSize),
+  }));
+  return {
+    version: 1,
+    kind: "patchpdf.patchmap",
+    generatedAt: new Date().toISOString(),
+    pageCount: snap.pageCount,
+    pageSizes: snap.pageSizes,
+    nLines: lines.length,
+    lines,
+    note:
+      "Agent API: use line id + find for replace_line. Human UI does not load this file.",
+  };
+}
+
+function round4(n) {
+  const x = Number(n);
+  if (!Number.isFinite(x)) return n;
+  return Math.round(x * 10000) / 10000;
+}
+
+/**
+ * Machine verification after patch (visible *and* extractable text caveats apply).
+ * For cover-paint edits, old substrings may still appear in extract — use
+ * `contains` for new text; treat `notContains` as soft unless strictExtract.
+ *
+ * @param {Uint8Array} pdfBytes
+ * @param {object} spec
+ * @param {string[]} [spec.contains] Must appear in extracted fullText
+ * @param {string[]} [spec.notContains] Should not appear (warn or fail)
+ * @param {boolean} [spec.strictExtract=false] Fail notContains even though cover-paint leaves old glyphs
+ * @returns {Promise<{ ok: boolean, fullText: string, missing: string[], stillPresent: string[], warnings: string[] }>}
+ */
+export async function verifyPdfText(pdfBytes, spec = {}) {
+  const snap = await extractSnapshot(pdfBytes);
+  const fullText = snap.fullText || "";
+  const contains = Array.isArray(spec.contains) ? spec.contains : [];
+  const notContains = Array.isArray(spec.notContains) ? spec.notContains : [];
+  const strictExtract = spec.strictExtract === true;
+  const missing = [];
+  const stillPresent = [];
+  const warnings = [];
+
+  for (const s of contains) {
+    if (!s) continue;
+    if (!fullText.includes(s)) missing.push(s);
+  }
+  for (const s of notContains) {
+    if (!s) continue;
+    if (fullText.includes(s)) stillPresent.push(s);
+  }
+
+  if (stillPresent.length && !strictExtract) {
+    warnings.push(
+      "notContains still found in extract — expected for visual cover-paint (old glyphs remain). Use strictExtract:true only if you need extract purity, or regen for forensic text.",
+    );
+  }
+
+  const ok =
+    missing.length === 0 &&
+    (strictExtract ? stillPresent.length === 0 : true);
+
+  return { ok, fullText, missing, stillPresent, warnings, pageCount: snap.pageCount };
+}
+
+/**
+ * One-shot agent entry: apply ops with fail-closed defaults, optional verify.
+ * Faster path than regenerating a research PDF when only facts/labels change.
+ *
+ * Human UI never calls this — browser demo keeps using applyOperations(bytes, ops).
+ *
+ * @param {Uint8Array} pdfBytes
+ * @param {object} request
+ * @param {object[]} request.operations
+ * @param {boolean} [request.failOnSkip=true]
+ * @param {number} [request.maxOps=32]
+ * @param {number} [request.requireApplied]
+ * @param {{ contains?: string[], notContains?: string[], strictExtract?: boolean }} [request.verify]
+ * @returns {Promise<object>}
+ */
+export async function patchPdfAgent(pdfBytes, request = {}) {
+  const operations = request.operations;
+  if (!Array.isArray(operations) || !operations.length) {
+    throw new Error("patchPdfAgent: operations[] required");
+  }
+  const failOnSkip = request.failOnSkip !== false; // default true for agents
+  const maxOps = request.maxOps != null ? Number(request.maxOps) : 32;
+
+  const result = await applyOperations(pdfBytes, operations, {
+    failOnSkip,
+    maxOps,
+    requireApplied: request.requireApplied,
+  });
+
+  let verify = null;
+  if (request.verify && typeof request.verify === "object") {
+    verify = await verifyPdfText(result.bytes, request.verify);
+    if (!verify.ok) {
+      const err = new Error(
+        `patchPdfAgent verify failed: missing=${JSON.stringify(verify.missing)} stillPresent=${JSON.stringify(verify.stillPresent)}`,
+      );
+      err.patchpdf = { ...result, verify };
+      throw err;
+    }
+  }
+
+  return {
+    bytes: result.bytes,
+    applied: result.applied,
+    warnings: result.warnings,
+    skipped: result.skipped,
+    verify,
+    mode: "agent",
+  };
+}
+
 
 export function parseLocalOps(instruction) {
   const ops = [];
