@@ -1147,7 +1147,8 @@ export async function verifyPdfText(pdfBytes, spec = {}) {
 
 /**
  * One-shot agent entry: apply ops with fail-closed defaults, optional verify.
- * Faster path than regenerating a research PDF when only facts/labels change.
+ * Prefer over full regen for fact/label fixes (layout fidelity). Not always
+ * faster in wall-clock than a minimal pdf-lib/HTML redraw — see AGENT_API.md.
  *
  * Human UI never calls this — browser demo keeps using applyOperations(bytes, ops).
  *

@@ -93,10 +93,12 @@ const result = await applyOperations(bytes, [
 
 ### Agents / scripts (no UI)
 
-Prefer **patch over regenerate** for fact/label fixes. Use the programmatic helpers
+Prefer **patch over regenerate** for fact/label fixes when layout fidelity matters
+or you only have the PDF. Wall-clock is **not** always faster than a minimal
+HTML/pdf-lib redraw — see **Speed honesty** in
+**[AGENT_API.md](./AGENT_API.md)**. Use the programmatic helpers
 (`buildPatchmap`, `patchPdfAgent`, `verifyPdfText`, `applyOperations` with
-`failOnSkip`). The human demo UI does **not** surface these — see
-**[AGENT_API.md](./AGENT_API.md)**.
+`failOnSkip`). The human demo UI does **not** surface these.
 
 ## Files
 
