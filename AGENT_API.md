@@ -74,6 +74,28 @@ import {
 
 Browser demo still uses only `extractSnapshot` + `applyOperations(bytes, ops)` with **no** third argument.
 
+## CLI (Node agents — surgical only)
+
+Layout-preserving edits from a shell (Grok / other coding agents). **Not** the human demo UI.
+
+```bash
+cd agent && npm install
+node cli.mjs map ../invoice.pdf -o map.json
+node cli.mjs apply ../invoice.pdf ops.json -o out.pdf --verify-contains "NEW"
+node cli.mjs verify out.pdf --contains "NEW"
+node cli.mjs smoke   # sample-invoice.pdf sanity check
+```
+
+Details: [`agent/README.md`](./agent/README.md).
+
+**When to use CLI vs Grok’s bundled `pdf` skill**
+
+| Task | Use |
+|------|-----|
+| Fact/label fix; must keep layout/fonts/pagination | **This CLI** (`map` / `apply` / `verify`) |
+| Create a new PDF, forms, OCR, merge/split | Grok `pdf` skill (reportlab / pypdf / etc.) |
+| Forensic extract purity (old string must vanish) | Regen or future stream rewrite — cover-paint is visual |
+
 ---
 
 ## `buildPatchmap(pdfBytes, options?)`

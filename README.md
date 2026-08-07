@@ -100,6 +100,10 @@ HTML/pdf-lib redraw — see **Speed honesty** in
 (`buildPatchmap`, `patchPdfAgent`, `verifyPdfText`, `applyOperations` with
 `failOnSkip`). The human demo UI does **not** surface these.
 
+**Node CLI (surgical only):** `agent/` — `map` / `apply` / `verify` for coding agents
+(layout-preserving edits). See [`agent/README.md`](./agent/README.md). Not a
+replacement for general PDF create/forms/OCR toolkits.
+
 ## Files
 
 | File | Role |

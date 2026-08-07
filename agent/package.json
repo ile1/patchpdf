@@ -1,0 +1,24 @@
+{
+  "name": "patchpdf-agent",
+  "version": "0.1.0",
+  "private": true,
+  "description": "CLI for layout-preserving surgical PDF text edits (agent path only)",
+  "type": "module",
+  "bin": {
+    "patchpdf-agent": "./cli.mjs"
+  },
+  "scripts": {
+    "map": "node cli.mjs map",
+    "apply": "node cli.mjs apply",
+    "verify": "node cli.mjs verify",
+    "smoke": "node cli.mjs smoke"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "docx": "9.5.1",
+    "pdf-lib": "1.17.1",
+    "pdfjs-dist": "4.10.38"
+  }
+}

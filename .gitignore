@@ -1,2 +1,4 @@
 .DS_Store
 node_modules/
+agent/node_modules/
+agent/.cache/
